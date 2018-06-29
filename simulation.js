@@ -8,13 +8,17 @@ var init, render, renderer, render_stats, physics_stats,
 //object globals
 var light, dLight, ground, ground_geometry,
     ground_material, camera, controls, ball;
+var stop = new THREE.Vector3(0,0,0),
+    go = new THREE.Vector3(1,1,1);
 
 var projector, 
     mouse_position = { x: 0, y: 0 },
     selectedBall = null,
     ball_offset = new THREE.Vector3,
-    intersect_plane;
-    targetList = [];
+    intersect_plane,
+    targetList = [],
+    allowed = true;
+    
 
 var windowHalfX = window.innerWidth / 2;
 var windowHalfY = window.innerHeight / 2;
@@ -92,7 +96,6 @@ function initSky() {
 }
 
 init = function(){
-
     renderer = new THREE.WebGLRenderer({antialias: true});
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize( window.innerWidth, window.innerHeight);
@@ -120,11 +123,8 @@ init = function(){
         function(){
             scene.simulate(undefined,2);
             physics_stats.update();
-        }
-    );
-
-    var axesHelper = new THREE.AxesHelper( 5 );
-    scene.add( axesHelper );
+        } 
+    )
 
     var SCREEN_WIDTH = window.innerWidth, SCREEN_HEIGHT = window.innerHeight;
 	var VIEW_ANGLE = 45, ASPECT = SCREEN_WIDTH / SCREEN_HEIGHT, NEAR = 0.1, FAR = 20000;
@@ -147,6 +147,23 @@ init = function(){
 
     controls.maxPolarAngle = Math.PI / 2;
     controls.update();
+
+    window.addEventListener('resize', onWindowResize, false);
+
+    initSky(); 
+
+    projector = new THREE.Projector();
+    //fitCameraToObject(camera, ball, 4, controls);
+    requestAnimationFrame( render );
+}
+
+
+    
+setup = function(){
+    controls.reset();
+    
+    var axesHelper = new THREE.AxesHelper( 5 );
+    scene.add( axesHelper );
 
     //light = new THREE.HemisphereLight(  0xffffbb, 0x080820, 1 )
     dLight = new THREE.DirectionalLight( 0xFFFFFF );
@@ -192,30 +209,33 @@ init = function(){
     ground.receiveShadow = true;
     scene.add( ground );
 
-    intersect_plane = new THREE.Mesh(
-        new THREE.PlaneGeometry( 150, 150 ),
-        new THREE.MeshBasicMaterial({ opacity: 0, transparent: true })
-    );
-    intersect_plane.rotation.x = Math.PI / -2;
-    scene.add( intersect_plane );
+    //batters box
+    var rectLength = 2.5, rectWidth = 1.3; 
+    var rect = new THREE.Shape()
+    rect.moveTo(-rectWidth/2
+        ,rectLength/2);
+    rect.lineTo(0, rectWidth);
+    rect.lineTo(rectLength/2, rectWidth/2);
+    rect.lineTo(rectLength/2, 0);
+    rect.lineTo(0,0);
 
+    var points = rect.getSpacedPoints(50);
+    var geometryPoints = new THREE.BufferGeometry().setFromPoints( points );
 
-    document.addEventListener('resize', onWindowResize, false);
-	projector = new THREE.Projector();
-
-    initSky();
+    var particles = new THREE.Points( geometryPoints, new THREE.PointsMaterial({ color:'red', size: .2} ));
+    particles.position.set(-10, 0, 0)
+    particles.scale.set(2,2,2);
+    particles.rotation.y = 90;
+    scene.add( particles );
     createBall();
-    //fitCameraToObject(camera, ball, 4, controls);
-    var stop = new THREE.Vector3(0,0,0);
-    
     initEventHandling();
-    
-    
-    requestAnimationFrame( render );
     console.log(scene)
 }
 //camera focus
 //from url:https://discourse.threejs.org/t/camera-zoom-to-fit-object/936/2 
+
+
+
 const fitCameraToObject = function ( camera, object, offset, controls ) {
 
     offset = offset || 1.25;
@@ -298,13 +318,19 @@ function createBall() {
     // ball.velocity.x = -15;
     // ball.velocity.y = 5;
     scene.add(ball);
-                                        //force values: (-3, 1.7,0), (-5,1,0)
-    ball.applyCentralImpulse(new THREE.Vector3(-5,1,0));
 
+
+     
+    ball.setLinearFactor(stop);
     targetList.push(ball);                    
     
 }
 
+function throwBall() { 
+    ball.setAngularFactor(go);
+    ball.setLinearFactor(go);                                //force values: (-3, 1.7,0), (-5,1,0)
+    ball.applyCentralImpulse(new THREE.Vector3(-5,1,0));
+}
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -312,9 +338,29 @@ function onWindowResize() {
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
+//delete scene for restart
+
+function cleanStart() {
+    var removable_items = []
+    for(var i = 0; i < scene.children.length; i++){
+        if(scene.children[i].type == THREE.Mesh){
+            removable_items.push(scene.children[i]);
+        }
+    }
+    console.log(scene.children)
+      if( removable_items.length > 0 ) {
+        removable_items.forEach(function(v,i) {
+           v.parent.remove(v);
+        });
+        removable_items = null;
+        removable_items = [];
+      }
+      setup();
+}
+
 initEventHandling = (function() {
     var _vector = new THREE.Vector3,
-        handleMouseDown, handleMouseMove, handleMouseUp;
+        handleMouseDown, handleMouseMove, handleMouseUp, onDocumentKeyDown;
     
     handleMouseDown = function( evt ) {
     
@@ -333,15 +379,14 @@ initEventHandling = (function() {
         intersections = ray.intersectObjects( targetList );
         console.log(intersections)
         selectedBall = intersections[0].object;
-        console.log(selectedBall);
         if( intersections.length > 0){
             intersections[0].face.color.setRGB(0.8*Math.random() + 0.2,0,0);
-            console.log(intersections[0].face.vertexNormals);
             intersections[0].object.geometry.colorsNeedUpdate = true;
             console.log(intersections[0].face.normal)
-            console.log(intersections[0].face.point);
-            z = Math.random();
-            selectedBall.applyImpulse(new THREE.Vector3(20,.9,0),
+            var z = Math.floor(Math.random()*9) + 1;
+            z *= Math.floor(Math.random()*2) == 1 ? 1 : -1;
+            console.log(z);
+            selectedBall.applyImpulse(new THREE.Vector3(20,.9,z),
                                             intersections[0].face.normal);
 
         }
@@ -388,13 +433,32 @@ initEventHandling = (function() {
             
             selectedBall = null;
         }
-        
-     };
+    };
+
+    onDocumentKeyDown = function(event) {
+        if (event.repeat != undefined) {
+            allowed = !event.repeat;
+          }
+        if (!allowed) return;
+        allowed = false;
+        var keyCode = event.which;
+        console.log(event.which);
+        if (keyCode == 32) {
+            //event.preventDefault()
+            throwBall();
+        }
+        if(keyCode == 82) {
+            event.preventDefault()
+            console.log(keyCode)
+            cleanStart();
+        }
+    };
     
     return function() {
         renderer.domElement.addEventListener( 'mousedown', handleMouseDown );
         renderer.domElement.addEventListener( 'mousemove', handleMouseMove );
         renderer.domElement.addEventListener( 'mouseup', handleMouseUp );
+        window.addEventListener('keydown', onDocumentKeyDown, false);
     };
 })();
 
@@ -415,19 +479,19 @@ function render() {
         //ball.applyCentralImpulse(new THREE.Vector3(1,.5,z));
     }
     if(ball.position.x > 25){
-        stop = new THREE.Vector3(0,0,0 )
-        ball.setAngularVelocity(stop);
-        ball.setLinearVelocity(stop);
-        ball.mass = 0;
-        //controls.update();
-    }
-    
+            stop = new THREE.Vector3(0,0,0 )
+            ball.setAngularVelocity(stop);
+            ball.setLinearVelocity(stop);
+            ball.mass = 0;
+            //controls.update();
+        }   
+        
 
     
 };
 
-
 init();
+setup();
 render();
 scene.simulate();
 //window.onload = init;
